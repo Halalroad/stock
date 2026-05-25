@@ -615,6 +615,46 @@ def portfolio_display_df(df_display: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+@st.dialog("매수 예정 종목 수정")
+def _edit_watchlist_item():
+    idx = st.session_state._wl_edit_idx
+    row = st.session_state.watchlist.loc[idx]
+    st.markdown(f"**{row['종목명']}** 정보를 수정합니다.")
+    st.caption("📌 매수 구간")
+    c1, c2 = st.columns(2)
+    with c1:
+        new_buy_lo = st.number_input("하단가 ($)", min_value=0.01, value=float(row["매수하단가(USD)"]), step=0.01, format="%.2f", key="edit_buy_lo")
+    with c2:
+        new_buy_hi = st.number_input("상단가 ($)", min_value=0.01, value=float(row["매수상단가(USD)"]), step=0.01, format="%.2f", key="edit_buy_hi")
+    st.caption("🎯 목표 매도 구간")
+    c3, c4 = st.columns(2)
+    with c3:
+        new_sell_lo = st.number_input("하단가 ($)", min_value=0.01, value=float(row["목표매도하단가(USD)"]), step=0.01, format="%.2f", key="edit_sell_lo")
+    with c4:
+        new_sell_hi = st.number_input("상단가 ($)", min_value=0.01, value=float(row["목표매도상단가(USD)"]), step=0.01, format="%.2f", key="edit_sell_hi")
+    new_qty = st.number_input("예정 수량 (주)", min_value=1, value=int(row["예정수량"]), step=1, key="edit_qty")
+    new_memo = st.text_input("메모", value=str(row["메모"]) if pd.notna(row["메모"]) else "", key="edit_memo")
+    e1, e2 = st.columns(2)
+    with e1:
+        if st.button("저장", type="primary", use_container_width=True):
+            if new_buy_lo > new_buy_hi:
+                st.error("매수 하단가가 상단가보다 클 수 없습니다.")
+            elif new_sell_lo > new_sell_hi:
+                st.error("목표 매도 하단가가 상단가보다 클 수 없습니다.")
+            else:
+                st.session_state.watchlist.at[idx, "매수하단가(USD)"] = new_buy_lo
+                st.session_state.watchlist.at[idx, "매수상단가(USD)"] = new_buy_hi
+                st.session_state.watchlist.at[idx, "목표매도하단가(USD)"] = new_sell_lo
+                st.session_state.watchlist.at[idx, "목표매도상단가(USD)"] = new_sell_hi
+                st.session_state.watchlist.at[idx, "예정수량"] = new_qty
+                st.session_state.watchlist.at[idx, "메모"] = new_memo
+                save_watchlist(st.session_state.watchlist)
+                st.rerun()
+    with e2:
+        if st.button("취소", use_container_width=True):
+            st.rerun()
+
+
 @st.dialog("매수 완료 — 포트폴리오로 이동")
 def _move_to_portfolio():
     row = st.session_state._wl_move_row
@@ -906,15 +946,20 @@ def render_watchlist_tab(live_mode: bool):
         for i, row in wl.iterrows()
     }
     sel_wl = st.selectbox("종목 선택", list(move_options.keys()), key="wl_action_sel")
-    a1, a2 = st.columns(2)
+    a1, a2, a3 = st.columns(3)
     with a1:
-        if st.button("✅ 매수 완료 — 포트폴리오로 이동", use_container_width=True, type="primary"):
+        if st.button("✅ 매수 완료", use_container_width=True, type="primary"):
             idx, row = move_options[sel_wl]
             st.session_state._wl_move_idx = idx
             st.session_state._wl_move_row = row
             _move_to_portfolio()
     with a2:
-        if st.button("🗑 선택 종목 삭제", use_container_width=True):
+        if st.button("✏️ 수정", use_container_width=True):
+            idx, _ = move_options[sel_wl]
+            st.session_state._wl_edit_idx = idx
+            _edit_watchlist_item()
+    with a3:
+        if st.button("🗑 삭제", use_container_width=True):
             idx, _ = move_options[sel_wl]
             st.session_state.watchlist = st.session_state.watchlist.drop(index=idx).reset_index(drop=True)
             save_watchlist(st.session_state.watchlist)
