@@ -175,7 +175,7 @@ st.markdown(
     <div class="hero">
         <div class="hero-badge">USD · Real-time</div>
         <h1>🇺🇸 미국주식 투자 관리 &amp; 매도 수익률 시뮬레이터</h1>
-        <p>매수·매도(분할 매도) 기록 · 실시간 평가 · 매도 시뮬레이션을 한 화면에서 관리하세요.</p>
+        <p>보유 종목 관리 · 매수 예정 모니터링 · 분할 매도 · 수익률 시뮬레이션을 한 화면에서</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -795,7 +795,7 @@ def render_portfolio_tab(df_display, live_mode: bool):
         """
         <div class="section-card">
             <h3>보유 현황 (미실현)</h3>
-            <p>아직 팔지 않은 주식만, <strong>현재가</strong> 기준으로 계산합니다. 파일에 저장되지 않으며 시세가 바뀌면 함께 변합니다.</p>
+            <p>현재가 기준 미실현 손익입니다. 시세에 따라 실시간으로 변동하며, 매도 시 <strong>매도 내역</strong> 탭에 실현 손익이 기록됩니다.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -924,6 +924,12 @@ def render_watchlist_tab(live_mode: bool):
         """,
         unsafe_allow_html=True,
     )
+    updated_at = st.session_state.get("quotes_updated_at", "")
+    if live_mode:
+        st.caption(f"🟢 자동 갱신 ON · {st.session_state.quote_refresh_interval}초마다 · 마지막 시세 {updated_at}")
+    elif updated_at:
+        st.caption(f"⏸ 자동 갱신 OFF · 마지막 시세 {updated_at}")
+
     wl = st.session_state.watchlist.copy()
     if wl.empty:
         st.info("사이드바 **「🔖 매수 예정 추가」**에서 관심 종목을 등록하세요.")
@@ -949,7 +955,7 @@ def render_watchlist_tab(live_mode: bool):
     wl["목표 매도가($)"] = wl.apply(
         lambda r: f"${float(r['목표매도하단가(USD)']):,.2f} ~ ${float(r['목표매도상단가(USD)']):,.2f}", axis=1
     )
-    wl["현재가 위치(%)"] = wl.apply(
+    wl["상단가 대비(%)"] = wl.apply(
         lambda r: ((r["현재가(USD)"] - float(r["매수상단가(USD)"])) / float(r["매수상단가(USD)"])) * 100
         if pd.notna(r["현재가(USD)"]) and float(r["매수상단가(USD)"]) > 0 else float("nan"),
         axis=1,
@@ -961,11 +967,11 @@ def render_watchlist_tab(live_mode: bool):
     w2.metric("구간 진입", f"{in_zone:,}개", delta="매수 검토" if in_zone > 0 else None)
     w3.metric("대기 중", f"{len(wl) - in_zone:,}개")
 
-    display_cols = ["종목명", "매수 구간($)", "목표 매도가($)", "예정수량", "현재가(USD)", "현재가 위치(%)", "상태", "메모"]
+    display_cols = ["종목명", "매수 구간($)", "목표 매도가($)", "예정수량", "현재가(USD)", "상단가 대비(%)", "상태", "메모"]
     styled = wl[display_cols].style.format({
         "예정수량": "{:,} 주",
         "현재가(USD)": "${:,.2f}",
-        "현재가 위치(%)": "{:+.2f}%",
+        "상단가 대비(%)": "{:+.2f}%",
     }, na_rep="N/A").apply(
         lambda col: [
             "background-color: #d4f8d4; color: #065f00; font-weight: bold;"
@@ -975,11 +981,11 @@ def render_watchlist_tab(live_mode: bool):
             else ""
             for v in col
         ], subset=["상태"]
-    ).apply(profit_loss_color, subset=["현재가 위치(%)"])
+    ).apply(profit_loss_color, subset=["상단가 대비(%)"])
 
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
-    st.markdown("##### 액션")
+    st.markdown("---")
     move_options = {
         f"{row['종목명']} — 매수구간 ${float(row['매수하단가(USD)']):,.2f}~${float(row['매수상단가(USD)']):,.2f} · {int(row['예정수량'])}주": (i, row)
         for i, row in wl.iterrows()
@@ -1193,23 +1199,10 @@ if not st.session_state.df.empty:
         manage_row = st.session_state.df[st.session_state.df["종목명"] == manage_ticker].iloc[0]
         hold_qty = int(manage_row["보유수량"])
 
-        st.caption(f"보유 **{hold_qty:,}주** · 매수가 **${manage_row['매수평단가(USD)']:,.2f}**")
+        tgt = manage_row["목표매도가(USD)"]
+        tgt_str = f"목표가 ${float(tgt):,.2f}" if pd.notna(tgt) and float(tgt) > 0 else "목표가 미설정"
+        st.caption(f"보유 **{hold_qty:,}주** · 매수가 **${manage_row['매수평단가(USD)']:,.2f}** · {tgt_str}")
 
-        edit_target = st.number_input(
-            "목표 매도가 ($, 선택)",
-            min_value=0.0,
-            value=float(manage_row["목표매도가(USD)"]) if pd.notna(manage_row["목표매도가(USD)"]) else 0.0,
-            step=0.01,
-            format="%.2f",
-            key="manage_target",
-        )
-        if st.button("목표가 저장", use_container_width=True):
-            idx = st.session_state.df.index[st.session_state.df["종목명"] == manage_ticker][0]
-            st.session_state.df.at[idx, "목표매도가(USD)"] = edit_target if edit_target > 0 else 0.0
-            save_data(st.session_state.df)
-            st.success(f"{manage_ticker} 목표가 저장됨")
-
-        st.markdown("---")
         manage_current_price = get_live_price(manage_ticker)
         if pd.notna(manage_current_price):
             st.caption(f"현재가 참고: **${manage_current_price:,.2f}**")
@@ -1317,19 +1310,16 @@ with st.sidebar.expander("📡 시세 갱신", expanded=True):
     st.caption("※ yfinance 무료 데이터는 HTS 실시간과 다를 수 있습니다.")
 
 # ----------------- 메인 화면 -----------------
-if st.session_state.auto_quote_refresh:
-    st.info(
-        f"🟢 자동 시세 갱신 **ON** ({st.session_state.quote_refresh_interval}초) · "
-        f"마지막 조회 {st.session_state.get('quotes_updated_at', '—')}"
-    )
-else:
-    st.info(
-        f"⏸ 자동 시세 갱신 **OFF** · 마지막 조회 {st.session_state.get('quotes_updated_at', '—')} · "
-        "사이드바 스위치를 켜면 자동 갱신됩니다."
-    )
+_refresh_status = (
+    f"🟢 자동 갱신 ON ({st.session_state.quote_refresh_interval}초)"
+    if st.session_state.auto_quote_refresh
+    else "⏸ 자동 갱신 OFF · 사이드바에서 켤 수 있습니다"
+)
+_updated = st.session_state.get("quotes_updated_at", "")
+st.caption(f"{_refresh_status}" + (f" · 마지막 시세 {_updated}" if _updated else ""))
 
 tab_portfolio, tab_simulator, tab_history, tab_watchlist = st.tabs(
-    ["📊 보유 (미실현)", "📈 매도 시뮬레이션", "📁 매도 내역 (실현)", "🔖 매수 예정"]
+    ["📊 보유 현황", "📈 매도 시뮬레이터", "📁 매도 내역", "🔖 매수 예정"]
 )
 
 with tab_portfolio:
@@ -1364,50 +1354,50 @@ with tab_simulator:
         render_simulator_tab(build_portfolio_df(), live_mode=False)
 
 with tab_history:
-        st.markdown(
-            """
-            <div class="section-card">
-                <h3>매도 내역</h3>
-                <p>분할·전량 매도 기록과 실현 손익을 확인합니다.</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
+    st.markdown(
+        """
+        <div class="section-card">
+            <h3>매도 내역</h3>
+            <p>분할·전량 매도 기록과 실현 손익을 확인합니다.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.session_state.history.empty:
+        st.info("아직 매도 기록이 없습니다. 사이드바 **「✅ 보유·매도 관리」**에서 매도를 기록하세요.")
+    else:
+        history_total_profit = st.session_state.history["매도손익($)"].sum()
+        history_avg_roi = st.session_state.history["매도수익률(%)"].mean()
+        hcol1, hcol2, hcol3 = st.columns(3)
+        hcol1.metric("누적 실현 손익", f"${history_total_profit:+,.2f}", help="매도 기록으로 확정·저장된 손익")
+        hcol2.metric("평균 실현 수익률", f"{history_avg_roi:+.2f}%", help="매도 건별 실현 수익률 평균")
+        hcol3.metric("매도 건수", f"{len(st.session_state.history):,}건")
+        st.dataframe(
+            st.session_state.history.style.format({
+                "매수평단가(USD)": "${:,.2f}",
+                "매도수량": "{:,} 주",
+                "매도비율(%)": "{:.1f}%",
+                "매도가(USD)": "${:,.2f}",
+                "매도손익($)": "${:,.2f}",
+                "매도수익률(%)": "{:+.2f}%",
+            }, na_rep="N/A").apply(profit_loss_color, subset=["매도손익($)", "매도수익률(%)"]),
+            use_container_width=True,
+            hide_index=True,
         )
-        if st.session_state.history.empty:
-            st.info("아직 매도 기록이 없습니다. 사이드바 **「✅ 보유·매도 관리」**에서 매도를 기록하세요.")
-        else:
-            history_total_profit = st.session_state.history["매도손익($)"].sum()
-            history_avg_roi = st.session_state.history["매도수익률(%)"].mean()
-            hcol1, hcol2, hcol3 = st.columns(3)
-            hcol1.metric("누적 실현 손익", f"${history_total_profit:+,.2f}", help="매도 기록으로 확정·저장된 손익")
-            hcol2.metric("평균 실현 수익률", f"{history_avg_roi:+.2f}%", help="매도 건별 실현 수익률 평균")
-            hcol3.metric("매도 건수", f"{len(st.session_state.history):,}건")
-            st.dataframe(
-                st.session_state.history.style.format({
-                    "매수평단가(USD)": "${:,.2f}",
-                    "매도수량": "{:,} 주",
-                    "매도비율(%)": "{:.1f}%",
-                    "매도가(USD)": "${:,.2f}",
-                    "매도손익($)": "${:,.2f}",
-                    "매도수익률(%)": "{:+.2f}%",
-                }, na_rep="N/A").apply(profit_loss_color, subset=["매도손익($)", "매도수익률(%)"]),
-                use_container_width=True,
-                hide_index=True,
-            )
-            with st.expander("🗑 매도 기록 삭제"):
-                opts = {
-                    f"{row['종목명']} | {row['매도일시']} | {int(row['매도수량'])}주 @ ${row['매도가(USD)']:,.2f}": i
-                    for i, row in st.session_state.history.iterrows()
-                }
-                sel_label = st.selectbox("삭제할 기록 선택", list(opts.keys()), key="del_hist_sel")
-                btn_d, btn_a = st.columns(2)
-                with btn_d:
-                    if st.button("선택 기록 삭제", use_container_width=True, type="primary"):
-                        st.session_state._del_hist_idx = opts[sel_label]
-                        _confirm_del_history()
-                with btn_a:
-                    if st.button("전체 매도 내역 삭제", use_container_width=True):
-                        _confirm_clear_history()
+        with st.expander("🗑 매도 기록 삭제"):
+            opts = {
+                f"{row['종목명']} | {row['매도일시']} | {int(row['매도수량'])}주 @ ${row['매도가(USD)']:,.2f}": i
+                for i, row in st.session_state.history.iterrows()
+            }
+            sel_label = st.selectbox("삭제할 기록 선택", list(opts.keys()), key="del_hist_sel")
+            btn_d, btn_a = st.columns(2)
+            with btn_d:
+                if st.button("선택 기록 삭제", use_container_width=True, type="primary"):
+                    st.session_state._del_hist_idx = opts[sel_label]
+                    _confirm_del_history()
+            with btn_a:
+                if st.button("전체 매도 내역 삭제", use_container_width=True):
+                    _confirm_clear_history()
 
 with tab_watchlist:
     if live_quote_secs > 0:
