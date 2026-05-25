@@ -274,6 +274,8 @@ HISTORY_COLUMNS = [
     "종목명", "매수평단가(USD)", "매도수량", "매도비율(%)",
     "매도가(USD)", "매도손익($)", "매도수익률(%)", "매도일시",
 ]
+WATCHLIST_FILE = "watchlist_usd.csv"
+WATCHLIST_COLUMNS = ["종목명", "목표매수가(USD)", "예정수량", "메모"]
 
 @st.cache_data(ttl=10)
 def get_usd_krw_rate():
@@ -554,6 +556,8 @@ def init_session_state():
         st.session_state.df = load_data()
     if "history" not in st.session_state:
         st.session_state.history = load_history()
+    if "watchlist" not in st.session_state:
+        st.session_state.watchlist = load_watchlist()
     if "auto_quote_refresh" not in st.session_state:
         st.session_state.auto_quote_refresh = False
     if "quote_refresh_interval" not in st.session_state:
@@ -609,6 +613,54 @@ def portfolio_display_df(df_display: pd.DataFrame) -> pd.DataFrame:
         "평가손익($)": "미실현 손익($)",
         "수익률(%)": "미실현 수익률(%)",
     })
+
+
+@st.dialog("매수 완료 — 포트폴리오로 이동")
+def _move_to_portfolio():
+    row = st.session_state._wl_move_row
+    ticker = row["종목명"]
+    st.markdown(f"**{ticker}** 매수를 기록하고 관심 종목에서 제거합니다.")
+    actual_price = st.number_input(
+        "실제 매수가 ($)",
+        min_value=0.01,
+        value=float(row["목표매수가(USD)"]) if pd.notna(row["목표매수가(USD)"]) and float(row["목표매수가(USD)"]) > 0 else 1.0,
+        step=0.01,
+        format="%.2f",
+    )
+    actual_qty = st.number_input(
+        "매수 수량 (주)",
+        min_value=1,
+        value=int(row["예정수량"]) if pd.notna(row["예정수량"]) and int(row["예정수량"]) > 0 else 1,
+        step=1,
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("포트폴리오에 추가", type="primary", use_container_width=True):
+            existing_mask = st.session_state.df["종목명"] == ticker
+            if existing_mask.any():
+                idx = st.session_state.df.index[existing_mask][0]
+                old_qty = int(st.session_state.df.at[idx, "보유수량"])
+                old_price = float(st.session_state.df.at[idx, "매수평단가(USD)"])
+                new_qty = old_qty + actual_qty
+                new_avg = (old_price * old_qty + actual_price * actual_qty) / new_qty
+                st.session_state.df.at[idx, "보유수량"] = new_qty
+                st.session_state.df.at[idx, "매수평단가(USD)"] = round(new_avg, 6)
+            else:
+                new_data = pd.DataFrame([{
+                    "종목명": ticker,
+                    "매수평단가(USD)": actual_price,
+                    "보유수량": actual_qty,
+                    "목표매도가(USD)": 0.0,
+                }])
+                st.session_state.df = pd.concat([st.session_state.df, new_data], ignore_index=True)
+            save_data(st.session_state.df)
+            wl_idx = st.session_state._wl_move_idx
+            st.session_state.watchlist = st.session_state.watchlist.drop(index=wl_idx).reset_index(drop=True)
+            save_watchlist(st.session_state.watchlist)
+            st.rerun()
+    with c2:
+        if st.button("취소", use_container_width=True):
+            st.rerun()
 
 
 @st.dialog("포트폴리오 전체 초기화")
@@ -779,6 +831,73 @@ def _get_firestore():
 _PORTFOLIO_DOC = ("portfolio", "main")
 
 
+def render_watchlist_tab(live_mode: bool):
+    st.markdown(
+        """
+        <div class="section-card">
+            <h3>매수 예정 종목</h3>
+            <p>관심 종목을 등록하고 목표 매수가 대비 현재가를 모니터링합니다. 매수가 되면 바로 포트폴리오로 이동하세요.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    wl = st.session_state.watchlist.copy()
+    if wl.empty:
+        st.info("사이드바 **「🔖 매수 예정 추가」**에서 관심 종목을 등록하세요.")
+        return
+
+    wl["현재가(USD)"] = wl["종목명"].apply(get_live_price)
+    wl["차이(%)"] = ((wl["현재가(USD)"] - wl["목표매수가(USD)"]) / wl["목표매수가(USD)"]) * 100
+    wl["상태"] = wl.apply(
+        lambda r: "✅ 매수 시점"
+        if pd.notna(r["현재가(USD)"]) and pd.notna(r["목표매수가(USD)"])
+        and float(r["목표매수가(USD)"]) > 0 and r["현재가(USD)"] <= r["목표매수가(USD)"]
+        else "⏳ 대기 중",
+        axis=1,
+    )
+
+    buy_count = (wl["상태"] == "✅ 매수 시점").sum()
+    w1, w2 = st.columns(2)
+    w1.metric("관심 종목 수", f"{len(wl):,}개")
+    w2.metric("매수 시점 도달", f"{buy_count:,}개", delta="확인 필요" if buy_count > 0 else None)
+
+    display_cols = ["종목명", "목표매수가(USD)", "예정수량", "현재가(USD)", "차이(%)", "상태", "메모"]
+    styled = wl[display_cols].style.format({
+        "목표매수가(USD)": "${:,.2f}",
+        "예정수량": "{:,} 주",
+        "현재가(USD)": "${:,.2f}",
+        "차이(%)": "{:+.2f}%",
+    }, na_rep="N/A").apply(
+        lambda col: [
+            "background-color: #d4f8d4; color: #065f00; font-weight: bold;"
+            if v == "✅ 매수 시점" else ""
+            for v in col
+        ], subset=["상태"]
+    ).apply(profit_loss_color, subset=["차이(%)"])
+
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    st.markdown("##### 액션")
+    move_options = {
+        f"{row['종목명']} — 목표 ${float(row['목표매수가(USD)']):,.2f} · {int(row['예정수량'])}주": (i, row)
+        for i, row in wl.iterrows()
+    }
+    sel_wl = st.selectbox("종목 선택", list(move_options.keys()), key="wl_action_sel")
+    a1, a2 = st.columns(2)
+    with a1:
+        if st.button("✅ 매수 완료 — 포트폴리오로 이동", use_container_width=True, type="primary"):
+            idx, row = move_options[sel_wl]
+            st.session_state._wl_move_idx = idx
+            st.session_state._wl_move_row = row
+            _move_to_portfolio()
+    with a2:
+        if st.button("🗑 선택 종목 삭제", use_container_width=True):
+            idx, _ = move_options[sel_wl]
+            st.session_state.watchlist = st.session_state.watchlist.drop(index=idx).reset_index(drop=True)
+            save_watchlist(st.session_state.watchlist)
+            st.rerun()
+
+
 def load_data():
     db = _get_firestore()
     if db is not None:
@@ -861,6 +980,43 @@ def save_history(df):
         except Exception:
             pass
     df.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
+
+
+def load_watchlist():
+    db = _get_firestore()
+    if db is not None:
+        try:
+            doc = db.collection(_PORTFOLIO_DOC[0]).document(_PORTFOLIO_DOC[1]).get()
+            if doc.exists:
+                rows = doc.to_dict().get("watchlist", [])
+                df = pd.DataFrame(rows) if rows else pd.DataFrame(columns=WATCHLIST_COLUMNS)
+                for col in WATCHLIST_COLUMNS:
+                    if col not in df.columns:
+                        df[col] = None
+                return df[WATCHLIST_COLUMNS]
+            return pd.DataFrame(columns=WATCHLIST_COLUMNS)
+        except Exception:
+            pass
+    if os.path.exists(WATCHLIST_FILE):
+        df = pd.read_csv(WATCHLIST_FILE)
+        for col in WATCHLIST_COLUMNS:
+            if col not in df.columns:
+                df[col] = None
+        return df[WATCHLIST_COLUMNS]
+    return pd.DataFrame(columns=WATCHLIST_COLUMNS)
+
+
+def save_watchlist(df):
+    db = _get_firestore()
+    if db is not None:
+        try:
+            db.collection(_PORTFOLIO_DOC[0]).document(_PORTFOLIO_DOC[1]).set(
+                {"watchlist": df.to_dict("records")}, merge=True
+            )
+            return
+        except Exception:
+            pass
+    df.to_csv(WATCHLIST_FILE, index=False, encoding="utf-8-sig")
 
 init_session_state()
 
@@ -989,6 +1145,32 @@ if not st.session_state.df.empty:
                 st.success(f"{manage_ticker} 보유 삭제됨")
                 st.rerun()
 
+with st.sidebar.expander("🔖 매수 예정 추가", expanded=False):
+    with st.form(key="add_watchlist_form", clear_on_submit=True, enter_to_submit=False, border=False):
+        wl_ticker = st.text_input("종목명 (예: NVDA, MSFT)").upper().strip()
+        wl_target = st.number_input("목표 매수가 ($)", min_value=0.01, step=0.01, format="%.2f")
+        wl_qty = st.number_input("예정 수량 (주)", min_value=1, step=1)
+        wl_memo = st.text_input("메모 (선택)", placeholder="예: 실적 발표 후 매수")
+        wl_submit = st.form_submit_button("관심 종목 추가", type="primary", use_container_width=True)
+
+if wl_submit:
+    if wl_ticker:
+        existing_wl = st.session_state.watchlist["종목명"] == wl_ticker
+        if existing_wl.any():
+            st.sidebar.warning(f"{wl_ticker} 이미 관심 종목에 있습니다.")
+        else:
+            new_wl = pd.DataFrame([{
+                "종목명": wl_ticker,
+                "목표매수가(USD)": wl_target,
+                "예정수량": wl_qty,
+                "메모": wl_memo if wl_memo else "",
+            }])
+            st.session_state.watchlist = pd.concat([st.session_state.watchlist, new_wl], ignore_index=True)
+            save_watchlist(st.session_state.watchlist)
+            st.sidebar.success(f"{wl_ticker} 관심 종목 추가됨!")
+    else:
+        st.sidebar.error("종목명을 입력해주세요.")
+
 with st.sidebar.expander("📡 시세 갱신", expanded=True):
     st.session_state.auto_quote_refresh = st.toggle(
         "자동 시세 갱신",
@@ -1013,56 +1195,53 @@ with st.sidebar.expander("📡 시세 갱신", expanded=True):
     st.caption("※ yfinance 무료 데이터는 HTS 실시간과 다를 수 있습니다.")
 
 # ----------------- 메인 화면 -----------------
-if st.session_state.df.empty:
-    st.markdown(
-        """
-        <div class="empty-state">
-            <h3>📭 아직 보유 종목이 없습니다</h3>
-            <p>왼쪽 사이드바 <strong>「➕ 새 매수 기록」</strong>에서 종목을 추가하면<br>
-            실시간 평가·시뮬레이션·매도 내역을 확인할 수 있습니다.</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+if st.session_state.auto_quote_refresh:
+    st.info(
+        f"🟢 자동 시세 갱신 **ON** ({st.session_state.quote_refresh_interval}초) · "
+        f"마지막 조회 {st.session_state.get('quotes_updated_at', '—')}"
     )
 else:
-    if st.session_state.auto_quote_refresh:
-        st.info(
-            f"🟢 자동 시세 갱신 **ON** ({st.session_state.quote_refresh_interval}초) · "
-            f"마지막 조회 {st.session_state.get('quotes_updated_at', '—')}"
-        )
-    else:
-        st.info(
-            f"⏸ 자동 시세 갱신 **OFF** · 마지막 조회 {st.session_state.get('quotes_updated_at', '—')} · "
-            "사이드바 스위치를 켜면 자동 갱신됩니다."
-        )
-
-    tab_portfolio, tab_simulator, tab_history = st.tabs(
-        ["📊 보유 (미실현)", "📈 매도 시뮬레이션", "📁 매도 내역 (실현)"]
+    st.info(
+        f"⏸ 자동 시세 갱신 **OFF** · 마지막 조회 {st.session_state.get('quotes_updated_at', '—')} · "
+        "사이드바 스위치를 켜면 자동 갱신됩니다."
     )
 
-    with tab_portfolio:
-        if live_quote_secs > 0:
+tab_portfolio, tab_simulator, tab_history, tab_watchlist = st.tabs(
+    ["📊 보유 (미실현)", "📈 매도 시뮬레이션", "📁 매도 내역 (실현)", "🔖 매수 예정"]
+)
 
-            @st.fragment(run_every=live_quote_secs)
-            def live_portfolio_panel():
-                render_portfolio_tab(build_portfolio_df(), live_mode=True)
+with tab_portfolio:
+    if st.session_state.df.empty:
+        st.markdown(
+            """
+            <div class="empty-state">
+                <h3>📭 아직 보유 종목이 없습니다</h3>
+                <p>왼쪽 사이드바 <strong>「➕ 새 매수 기록」</strong>에서 종목을 추가하면<br>
+                실시간 평가·시뮬레이션·매도 내역을 확인할 수 있습니다.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    elif live_quote_secs > 0:
+        @st.fragment(run_every=live_quote_secs)
+        def live_portfolio_panel():
+            render_portfolio_tab(build_portfolio_df(), live_mode=True)
+        live_portfolio_panel()
+    else:
+        render_portfolio_tab(build_portfolio_df(), live_mode=False)
 
-            live_portfolio_panel()
-        else:
-            render_portfolio_tab(build_portfolio_df(), live_mode=False)
+with tab_simulator:
+    if st.session_state.df.empty:
+        st.info("보유 종목을 먼저 추가하세요.")
+    elif live_quote_secs > 0:
+        @st.fragment(run_every=live_quote_secs)
+        def live_simulator_panel():
+            render_simulator_tab(build_portfolio_df(), live_mode=True)
+        live_simulator_panel()
+    else:
+        render_simulator_tab(build_portfolio_df(), live_mode=False)
 
-    with tab_simulator:
-        if live_quote_secs > 0:
-
-            @st.fragment(run_every=live_quote_secs)
-            def live_simulator_panel():
-                render_simulator_tab(build_portfolio_df(), live_mode=True)
-
-            live_simulator_panel()
-        else:
-            render_simulator_tab(build_portfolio_df(), live_mode=False)
-
-    with tab_history:
+with tab_history:
         st.markdown(
             """
             <div class="section-card">
@@ -1107,3 +1286,12 @@ else:
                 with btn_a:
                     if st.button("전체 매도 내역 삭제", use_container_width=True):
                         _confirm_clear_history()
+
+with tab_watchlist:
+    if live_quote_secs > 0:
+        @st.fragment(run_every=live_quote_secs)
+        def live_watchlist_panel():
+            render_watchlist_tab(live_mode=True)
+        live_watchlist_panel()
+    else:
+        render_watchlist_tab(live_mode=False)
