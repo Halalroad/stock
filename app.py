@@ -303,6 +303,66 @@ def get_usd_krw_rate():
 _initial_fx = get_usd_krw_rate()
 _initial_fx_js = "null" if _initial_fx is None else f"{_initial_fx:.4f}"
 
+# ── NYSE 휴장일 계산 ──────────────────────────────────────────────────────────
+def _easter(year: int):
+    """그레고리안 부활절 날짜 계산."""
+    from datetime import date as _d
+    a,b,c = year%19, year//100, year%100
+    d,e = b//4, b%4
+    f = (b+8)//25; g = (b-f+1)//3
+    h = (19*a+b-d-g+15)%30
+    i,k = c//4, c%4
+    l = (32+2*e+2*i-h-k)%7
+    m = (a+11*h+22*l)//451
+    month = (h+l-7*m+114)//31
+    day   = ((h+l-7*m+114)%31)+1
+    return _d(year, month, day)
+
+def _nth_dow(year: int, month: int, dow: int, n: int):
+    """월의 n번째 요일(0=월). n=-1 이면 마지막."""
+    from datetime import date as _d, timedelta as _td
+    import calendar as _cal
+    if n > 0:
+        first = _d(year, month, 1)
+        delta = (dow - first.weekday()) % 7
+        return first + _td(days=delta + (n-1)*7)
+    last = _d(year, month, _cal.monthrange(year, month)[1])
+    delta = (last.weekday() - dow) % 7
+    return last - _td(days=delta)
+
+def _obs(d):
+    """NYSE 대체공휴일: 토요일→금요일, 일요일→월요일."""
+    from datetime import timedelta as _td
+    if d.weekday() == 5: return d - _td(1)
+    if d.weekday() == 6: return d + _td(1)
+    return d
+
+def nyse_holidays(year: int) -> dict:
+    from datetime import date as _d, timedelta as _td
+    e = _easter(year)
+    return {
+        _obs(_d(year, 1,  1)):  "신정",
+        _nth_dow(year, 1, 0, 3): "마틴 루터 킹 기념일",
+        _nth_dow(year, 2, 0, 3): "대통령의 날",
+        e - _td(2):              "굿 프라이데이",
+        _nth_dow(year, 5, 0,-1): "메모리얼 데이",
+        _obs(_d(year, 6, 19)):  "준틴스",
+        _obs(_d(year, 7,  4)):  "독립기념일",
+        _nth_dow(year, 9, 0, 1): "노동절",
+        _nth_dow(year,11, 3, 4): "추수감사절",
+        _obs(_d(year,12, 25)):  "크리스마스",
+    }
+
+# 오늘 날짜(ET 기준) 계산 및 휴장 여부 확인
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td2, date as _date2
+_now_utc = _dt.now(_tz.utc)
+_et_offset = -4 if 3 <= _now_utc.month <= 11 else -5   # EDT/EST 근사
+_today_et  = (_now_utc + _td2(hours=_et_offset)).date()
+_hmap = nyse_holidays(_today_et.year)
+_today_holiday = _hmap.get(_today_et)
+_is_holiday_js   = "true"  if _today_holiday else "false"
+_holiday_name_js = f'"{_today_holiday}"' if _today_holiday else "null"
+
 # 시간·환율: 클라이언트에서 매초/주기 갱신 (페이지 새로고침 없음)
 components.html(
     f"""
@@ -323,6 +383,8 @@ components.html(
         </div>
     </div>
     <script>
+        const isHoliday   = {_is_holiday_js};
+        const holidayName = {_holiday_name_js};
         let fxRate = {_initial_fx_js};
         let fxUpdatedAt = fxRate ? new Date() : null;
 
@@ -395,7 +457,10 @@ components.html(
                 const minute = usDate.getMinutes();
                 let status = '';
                 let style = '';
-                if (day === 0 || day === 6) {{
+                if (isHoliday) {{
+                    status = '휴장 — ' + holidayName;
+                    style = 'background: #f9d6d5; color: #9a0000;';
+                }} else if (day === 0 || day === 6) {{
                     status = '주말 휴장';
                     style = 'background: #f9d6d5; color: #9a0000;';
                 }} else if (hour < 4) {{
