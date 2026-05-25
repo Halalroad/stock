@@ -667,14 +667,20 @@ def style_portfolio_df(df_display):
             return f"${val:,.4f}"
         return f"${val:,.2f}"
 
-    styled = df_display.style.format_map({
-        col: (lambda v, col=col: (
-            f"{v:,} 주" if col == "보유수량"
-            else f"{v:+.2f}%" if "수익률" in col
-            else fmt_price(v)
-        ))
-        for col in df_display.columns
-    })
+    # 가격 columns 목록
+    price_cols = {"매수평단가(USD)", "목표매도가(USD)", "현재가(USD)", "총 매수금액($)", "평가금액($)", "평가손익($)", "미실현 손익($)"}
+
+    # 포맷 딕셔너리 생성
+    format_dict = {}
+    for col in df_display.columns:
+        if col == "보유수량":
+            format_dict[col] = "{:,} 주"
+        elif "수익률" in col:
+            format_dict[col] = "{:+.2f}%"
+        elif col in price_cols:
+            format_dict[col] = fmt_price  # callable 사용
+
+    styled = df_display.style.format(format_dict, na_rep="N/A")
     pl_cols = [c for c in ["미실현 손익($)", "미실현 수익률(%)", "평가손익($)", "수익률(%)"] if c in df_display.columns]
     styled = styled.apply(profit_loss_color, subset=pl_cols)
     styled = styled.apply(target_price_color, subset=["목표매도가(USD)"])
