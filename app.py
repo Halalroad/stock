@@ -656,21 +656,25 @@ def build_portfolio_df():
 
 
 def style_portfolio_df(df_display):
-    styled = df_display.style.format(
-        {
-            "매수평단가(USD)": "${:,.2f}",
-            "목표매도가(USD)": "${:,.2f}",
-            "현재가(USD)": "${:,.2f}",
-            "보유수량": "{:,} 주",
-            "총 매수금액($)": "${:,.2f}",
-            "평가금액($)": "${:,.2f}",
-            "평가손익($)": "${:,.2f}",
-            "수익률(%)": "{:+.2f}%",
-            "미실현 손익($)": "${:,.2f}",
-            "미실현 수익률(%)": "{:+.2f}%",
-        },
-        na_rep="N/A",
-    )
+    def fmt_price(val):
+        """가격 포맷: $0.0001 이상은 4자리, $0.01 이상은 2자리."""
+        if pd.isna(val):
+            return "N/A"
+        val = float(val)
+        if val == 0:
+            return "$0.00"
+        if abs(val) < 0.01:
+            return f"${val:,.4f}"
+        return f"${val:,.2f}"
+
+    styled = df_display.style.format_map({
+        col: (lambda v, col=col: (
+            f"{v:,} 주" if col == "보유수량"
+            else f"{v:+.2f}%" if "수익률" in col
+            else fmt_price(v)
+        ))
+        for col in df_display.columns
+    })
     pl_cols = [c for c in ["미실현 손익($)", "미실현 수익률(%)", "평가손익($)", "수익률(%)"] if c in df_display.columns]
     styled = styled.apply(profit_loss_color, subset=pl_cols)
     styled = styled.apply(target_price_color, subset=["목표매도가(USD)"])
@@ -1277,10 +1281,13 @@ if not st.session_state.df.empty:
         if pd.notna(manage_current_price):
             st.caption(f"현재가 참고: **${manage_current_price:,.2f}**")
 
+        # 현재가 또는 매수가 중 유효한 값 선택
+        default_sell_price = float(manage_current_price) if (pd.notna(manage_current_price) and float(manage_current_price) >= 0.01) else float(manage_row["매수평단가(USD)"])
+
         manage_sell_price = st.number_input(
             "매도 가격 ($)",
             min_value=0.01,
-            value=float(manage_current_price) if pd.notna(manage_current_price) else float(manage_row["매수평단가(USD)"]),
+            value=default_sell_price,
             step=0.01,
             format="%.2f",
             key="manage_sell_price",
