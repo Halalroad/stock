@@ -166,6 +166,15 @@ APP_CSS = """
         overflow: hidden;
         border: 1px solid #64748b !important;
     }
+    [data-testid="stDataFrame"] table {
+        width: 100% !important;
+        table-layout: auto !important;
+    }
+    [data-testid="stDataFrame"] th,
+    [data-testid="stDataFrame"] td {
+        width: auto !important;
+        min-width: auto !important;
+    }
     div[data-testid="stToolbarActionButton"], .stFormSubmitHint { display: none !important; }
 </style>
 """
