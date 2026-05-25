@@ -889,25 +889,20 @@ def render_portfolio_tab(df_display, live_mode: bool):
         st.caption(f"📁 참고: 누적 **실현 손익** ${realized_profit:+,.2f} (매도 내역 탭에서 상세 확인)")
 
     st.markdown("##### 보유 종목 상세")
+    st.dataframe(
+        style_portfolio_df(portfolio_display_df(df_display)),
+        use_container_width=True,
+        hide_index=True,
+    )
 
-    col1, col2 = st.columns([20, 1])
-    with col1:
-        st.dataframe(
-            style_portfolio_df(portfolio_display_df(df_display)),
-            use_container_width=True,
-            hide_index=True,
-        )
-    with col2:
-        st.caption("종목 선택 후 수정")
-        ticker_for_edit = st.selectbox(
-            "종목명",
-            ["—"] + df_display["종목명"].tolist(),
-            label_visibility="collapsed",
-            key="table_edit_ticker"
-        )
-        if ticker_for_edit != "—":
-            if st.button("✏️", use_container_width=True, help="이 종목을 수정합니다"):
-                st.session_state._portfolio_edit_ticker = ticker_for_edit
+    st.markdown("---")
+    st.caption("**종목별 수정:**")
+    edit_cols = st.columns(len(df_display))
+    for i, (_, row) in enumerate(df_display.iterrows()):
+        ticker = row["종목명"]
+        with edit_cols[i]:
+            if st.button(f"✏️ {ticker}", use_container_width=True, key=f"edit_btn_{ticker}"):
+                st.session_state._portfolio_edit_ticker = ticker
                 _edit_portfolio_item()
 
     reset_col, _ = st.columns([1, 3])
