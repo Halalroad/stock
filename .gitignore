@@ -1,0 +1,7 @@
+.venv/
+.streamlit/secrets.toml
+stocks_usd.csv
+history_usd.csv
+__pycache__/
+*.pyc
+*.pyo
