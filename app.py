@@ -889,11 +889,26 @@ def render_portfolio_tab(df_display, live_mode: bool):
         st.caption(f"📁 참고: 누적 **실현 손익** ${realized_profit:+,.2f} (매도 내역 탭에서 상세 확인)")
 
     st.markdown("##### 보유 종목 상세")
-    st.dataframe(
-        style_portfolio_df(portfolio_display_df(df_display)),
-        use_container_width=True,
-        hide_index=True,
-    )
+
+    col1, col2 = st.columns([20, 1])
+    with col1:
+        st.dataframe(
+            style_portfolio_df(portfolio_display_df(df_display)),
+            use_container_width=True,
+            hide_index=True,
+        )
+    with col2:
+        st.caption("종목 선택 후 수정")
+        ticker_for_edit = st.selectbox(
+            "종목명",
+            ["—"] + df_display["종목명"].tolist(),
+            label_visibility="collapsed",
+            key="table_edit_ticker"
+        )
+        if ticker_for_edit != "—":
+            if st.button("✏️", use_container_width=True, help="이 종목을 수정합니다"):
+                st.session_state._portfolio_edit_ticker = ticker_for_edit
+                _edit_portfolio_item()
 
     reset_col, _ = st.columns([1, 3])
     with reset_col:
@@ -1220,14 +1235,6 @@ with st.sidebar.expander("➕ 새 매수 기록", expanded=True):
         ticker = st.text_input("종목명 (예: AAPL, TSLA)").upper().strip()
         buy_price = st.number_input("매수 평단가 ($)", min_value=0.01, step=0.01, format="%.2f")
         quantity = st.number_input("보유 수량 (주)", min_value=1, step=1)
-        target_price = st.number_input(
-            "목표 매도가 ($, 선택)",
-            min_value=0.0,
-            value=buy_price,
-            step=0.01,
-            format="%.2f",
-            help="0이면 목표가 없음",
-        )
         submit_button = st.form_submit_button("포트폴리오에 추가", type="primary", use_container_width=True)
 
 if submit_button:
@@ -1241,8 +1248,6 @@ if submit_button:
             new_avg = (old_price * old_qty + buy_price * quantity) / new_qty
             st.session_state.df.at[idx, "보유수량"] = new_qty
             st.session_state.df.at[idx, "매수평단가(USD)"] = round(new_avg, 6)
-            if target_price > 0:
-                st.session_state.df.at[idx, "목표매도가(USD)"] = target_price
             save_data(st.session_state.df)
             st.success(f"{ticker} 추가 매수 반영 — 평단가 ${new_avg:,.2f} · 총 {new_qty:,}주")
         else:
@@ -1250,7 +1255,7 @@ if submit_button:
                 "종목명": ticker,
                 "매수평단가(USD)": buy_price,
                 "보유수량": quantity,
-                "목표매도가(USD)": target_price if target_price > 0 else 0.0,
+                "목표매도가(USD)": 0.0,
             }])
             st.session_state.df = pd.concat([st.session_state.df, new_data], ignore_index=True)
             save_data(st.session_state.df)
