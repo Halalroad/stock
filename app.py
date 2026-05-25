@@ -269,7 +269,7 @@ components.html(
 # 데이터 저장을 위한 CSV 파일 경로
 DATA_FILE = "stocks_usd.csv"
 HISTORY_FILE = "history_usd.csv"
-DEFAULT_COLUMNS = ["종목명", "매수평단가(USD)", "보유수량", "목표매도가(USD)"]
+DEFAULT_COLUMNS = ["종목명", "매수평단가(USD)", "보유수량", "목표매도가(USD)", "메모"]
 HISTORY_COLUMNS = [
     "종목명", "매수평단가(USD)", "매도수량", "매도비율(%)",
     "매도가(USD)", "매도손익($)", "매도수익률(%)", "매도일시",
@@ -689,10 +689,18 @@ def style_portfolio_df(df_display):
 
 
 def portfolio_display_df(df_display: pd.DataFrame) -> pd.DataFrame:
-    return df_display.rename(columns={
+    df = df_display.rename(columns={
         "평가손익($)": "미실현 손익($)",
         "수익률(%)": "미실현 수익률(%)",
     })
+    # 열 순서 조정: 메모를 조건 옆에 배치, 칼럼 너비 줄이기용 순서 변경
+    desired_order = [
+        "종목명", "매수평단가(USD)", "현재가(USD)", "보유수량",
+        "총 매수금액($)", "평가금액($)", "미실현 손익($)", "미실현 수익률(%)",
+        "목표매도가(USD)", "조건", "메모"
+    ]
+    existing_cols = [col for col in desired_order if col in df.columns]
+    return df[existing_cols]
 
 
 @st.dialog("보유 종목 수정")
@@ -721,12 +729,19 @@ def _edit_portfolio_item():
         step=0.01,
         format="%.2f",
     )
+    new_memo = st.text_area(
+        "메모 (예: 언제 매도할지, 매도 이유 등)",
+        value=row.get("메모", "") or "",
+        height=60,
+        max_chars=200,
+    )
     e1, e2 = st.columns(2)
     with e1:
         if st.button("저장", type="primary", use_container_width=True):
             st.session_state.df.at[idx, "매수평단가(USD)"] = new_price
             st.session_state.df.at[idx, "보유수량"] = new_qty
             st.session_state.df.at[idx, "목표매도가(USD)"] = new_target if new_target > 0 else 0.0
+            st.session_state.df.at[idx, "메모"] = new_memo
             save_data(st.session_state.df)
             st.rerun()
     with e2:
@@ -904,8 +919,13 @@ def render_portfolio_tab(df_display, live_mode: bool):
         st.caption(f"📁 참고: 누적 **실현 손익** ${realized_profit:+,.2f} (매도 내역 탭에서 상세 확인)")
 
     st.markdown("##### 보유 종목 상세")
+    # 메모 칼럼 미리보기 (최대 15자)
+    display_df = portfolio_display_df(df_display).copy()
+    display_df["메모"] = display_df["메모"].fillna("").apply(
+        lambda x: (x[:15] + "...") if len(str(x)) > 15 else x
+    )
     st.dataframe(
-        style_portfolio_df(portfolio_display_df(df_display)),
+        style_portfolio_df(display_df),
         use_container_width=True,
         hide_index=True,
     )
