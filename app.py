@@ -615,6 +615,45 @@ def portfolio_display_df(df_display: pd.DataFrame) -> pd.DataFrame:
     })
 
 
+@st.dialog("보유 종목 수정")
+def _edit_portfolio_item():
+    ticker = st.session_state._portfolio_edit_ticker
+    idx = st.session_state.df.index[st.session_state.df["종목명"] == ticker][0]
+    row = st.session_state.df.loc[idx]
+    st.markdown(f"**{ticker}** 보유 정보를 수정합니다.")
+    new_price = st.number_input(
+        "매수 평단가 ($)",
+        min_value=0.01,
+        value=float(row["매수평단가(USD)"]),
+        step=0.01,
+        format="%.2f",
+    )
+    new_qty = st.number_input(
+        "보유 수량 (주)",
+        min_value=1,
+        value=int(row["보유수량"]),
+        step=1,
+    )
+    new_target = st.number_input(
+        "목표 매도가 ($, 0이면 미설정)",
+        min_value=0.0,
+        value=float(row["목표매도가(USD)"]) if pd.notna(row["목표매도가(USD)"]) else 0.0,
+        step=0.01,
+        format="%.2f",
+    )
+    e1, e2 = st.columns(2)
+    with e1:
+        if st.button("저장", type="primary", use_container_width=True):
+            st.session_state.df.at[idx, "매수평단가(USD)"] = new_price
+            st.session_state.df.at[idx, "보유수량"] = new_qty
+            st.session_state.df.at[idx, "목표매도가(USD)"] = new_target if new_target > 0 else 0.0
+            save_data(st.session_state.df)
+            st.rerun()
+    with e2:
+        if st.button("취소", use_container_width=True):
+            st.rerun()
+
+
 @st.dialog("매수 예정 종목 수정")
 def _edit_watchlist_item():
     idx = st.session_state._wl_edit_idx
@@ -1197,7 +1236,7 @@ if not st.session_state.df.empty:
             f"잔여 **{hold_qty - preview_qty:,}주**"
         )
 
-        btn_col1, btn_col2 = st.columns(2)
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
         with btn_col1:
             if st.button("매도 기록", use_container_width=True, type="primary"):
                 sold_qty, remaining = record_partial_sell(manage_row, manage_sell_price, sell_pct)
@@ -1207,7 +1246,11 @@ if not st.session_state.df.empty:
                     st.success(f"{manage_ticker} 전량 매도 완료 ({sold_qty:,}주)")
                 st.rerun()
         with btn_col2:
-            if st.button("보유 삭제", use_container_width=True):
+            if st.button("✏️ 수정", use_container_width=True):
+                st.session_state._portfolio_edit_ticker = manage_ticker
+                _edit_portfolio_item()
+        with btn_col3:
+            if st.button("삭제", use_container_width=True):
                 st.session_state.df = st.session_state.df[st.session_state.df["종목명"] != manage_ticker].reset_index(drop=True)
                 save_data(st.session_state.df)
                 st.success(f"{manage_ticker} 보유 삭제됨")
