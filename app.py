@@ -275,7 +275,7 @@ HISTORY_COLUMNS = [
     "매도가(USD)", "매도손익($)", "매도수익률(%)", "매도일시",
 ]
 WATCHLIST_FILE = "watchlist_usd.csv"
-WATCHLIST_COLUMNS = ["종목명", "목표매수가(USD)", "예정수량", "메모"]
+WATCHLIST_COLUMNS = ["종목명", "매수하단가(USD)", "매수상단가(USD)", "목표매도하단가(USD)", "목표매도상단가(USD)", "예정수량", "메모"]
 
 @st.cache_data(ttl=10)
 def get_usd_krw_rate():
@@ -619,11 +619,15 @@ def portfolio_display_df(df_display: pd.DataFrame) -> pd.DataFrame:
 def _move_to_portfolio():
     row = st.session_state._wl_move_row
     ticker = row["종목명"]
+    low = float(row["매수하단가(USD)"])
+    high = float(row["매수상단가(USD)"])
+    mid = round((low + high) / 2, 2)
     st.markdown(f"**{ticker}** 매수를 기록하고 관심 종목에서 제거합니다.")
+    st.caption(f"설정 매수 구간: ${low:,.2f} ~ ${high:,.2f}")
     actual_price = st.number_input(
         "실제 매수가 ($)",
         min_value=0.01,
-        value=float(row["목표매수가(USD)"]) if pd.notna(row["목표매수가(USD)"]) and float(row["목표매수가(USD)"]) > 0 else 1.0,
+        value=mid,
         step=0.01,
         format="%.2f",
     )
@@ -836,7 +840,7 @@ def render_watchlist_tab(live_mode: bool):
         """
         <div class="section-card">
             <h3>매수 예정 종목</h3>
-            <p>관심 종목을 등록하고 목표 매수가 대비 현재가를 모니터링합니다. 매수가 되면 바로 포트폴리오로 이동하세요.</p>
+            <p>매수 구간과 목표 매도 구간을 설정하고 현재가를 모니터링합니다. 구간 진입 시 바로 포트폴리오로 이동하세요.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -847,39 +851,58 @@ def render_watchlist_tab(live_mode: bool):
         return
 
     wl["현재가(USD)"] = wl["종목명"].apply(get_live_price)
-    wl["차이(%)"] = ((wl["현재가(USD)"] - wl["목표매수가(USD)"]) / wl["목표매수가(USD)"]) * 100
-    wl["상태"] = wl.apply(
-        lambda r: "✅ 매수 시점"
-        if pd.notna(r["현재가(USD)"]) and pd.notna(r["목표매수가(USD)"])
-        and float(r["목표매수가(USD)"]) > 0 and r["현재가(USD)"] <= r["목표매수가(USD)"]
-        else "⏳ 대기 중",
+
+    def _wl_status(r):
+        px = r["현재가(USD)"]
+        lo, hi = float(r["매수하단가(USD)"]), float(r["매수상단가(USD)"])
+        if pd.isna(px):
+            return "— 시세 없음"
+        if lo <= px <= hi:
+            return "✅ 매수 구간 진입"
+        if px > hi:
+            return "⬆️ 고가 대기"
+        return "⬇️ 구간 하회"
+
+    wl["상태"] = wl.apply(_wl_status, axis=1)
+    wl["매수 구간($)"] = wl.apply(
+        lambda r: f"${float(r['매수하단가(USD)']):,.2f} ~ ${float(r['매수상단가(USD)']):,.2f}", axis=1
+    )
+    wl["목표 매도가($)"] = wl.apply(
+        lambda r: f"${float(r['목표매도하단가(USD)']):,.2f} ~ ${float(r['목표매도상단가(USD)']):,.2f}", axis=1
+    )
+    wl["현재가 위치(%)"] = wl.apply(
+        lambda r: ((r["현재가(USD)"] - float(r["매수상단가(USD)"])) / float(r["매수상단가(USD)"])) * 100
+        if pd.notna(r["현재가(USD)"]) and float(r["매수상단가(USD)"]) > 0 else float("nan"),
         axis=1,
     )
 
-    buy_count = (wl["상태"] == "✅ 매수 시점").sum()
-    w1, w2 = st.columns(2)
+    in_zone = (wl["상태"] == "✅ 매수 구간 진입").sum()
+    w1, w2, w3 = st.columns(3)
     w1.metric("관심 종목 수", f"{len(wl):,}개")
-    w2.metric("매수 시점 도달", f"{buy_count:,}개", delta="확인 필요" if buy_count > 0 else None)
+    w2.metric("구간 진입", f"{in_zone:,}개", delta="매수 검토" if in_zone > 0 else None)
+    w3.metric("대기 중", f"{len(wl) - in_zone:,}개")
 
-    display_cols = ["종목명", "목표매수가(USD)", "예정수량", "현재가(USD)", "차이(%)", "상태", "메모"]
+    display_cols = ["종목명", "매수 구간($)", "목표 매도가($)", "예정수량", "현재가(USD)", "현재가 위치(%)", "상태", "메모"]
     styled = wl[display_cols].style.format({
-        "목표매수가(USD)": "${:,.2f}",
         "예정수량": "{:,} 주",
         "현재가(USD)": "${:,.2f}",
-        "차이(%)": "{:+.2f}%",
+        "현재가 위치(%)": "{:+.2f}%",
     }, na_rep="N/A").apply(
         lambda col: [
             "background-color: #d4f8d4; color: #065f00; font-weight: bold;"
-            if v == "✅ 매수 시점" else ""
+            if v == "✅ 매수 구간 진입"
+            else "background-color: #fff4cc; color: #a06100; font-weight: bold;"
+            if v == "⬆️ 고가 대기"
+            else ""
             for v in col
         ], subset=["상태"]
-    ).apply(profit_loss_color, subset=["차이(%)"])
+    ).apply(profit_loss_color, subset=["현재가 위치(%)"])
 
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     st.markdown("##### 액션")
     move_options = {
-        f"{row['종목명']} — 목표 ${float(row['목표매수가(USD)']):,.2f} · {int(row['예정수량'])}주": (i, row)
+        f"{row['종목명']} — 매수구간 ${float(row['매수하단가(USD)']):,.2f}~${float(row['매수상단가(USD)']):,.2f} · {int(row['예정수량'])}주": (i, row)
         for i, row in wl.iterrows()
     }
     sel_wl = st.selectbox("종목 선택", list(move_options.keys()), key="wl_action_sel")
@@ -1147,21 +1170,32 @@ if not st.session_state.df.empty:
 
 with st.sidebar.expander("🔖 매수 예정 추가", expanded=False):
     with st.form(key="add_watchlist_form", clear_on_submit=True, enter_to_submit=False, border=False):
-        wl_ticker = st.text_input("종목명 (예: NVDA, MSFT)").upper().strip()
-        wl_target = st.number_input("목표 매수가 ($)", min_value=0.01, step=0.01, format="%.2f")
+        wl_ticker = st.text_input("종목명 (예: RKLB, NVDA)").upper().strip()
+        st.caption("📌 매수 구간")
+        wl_buy_lo = st.number_input("하단가 ($)", min_value=0.01, step=0.01, format="%.2f", key="wl_buy_lo")
+        wl_buy_hi = st.number_input("상단가 ($)", min_value=0.01, step=0.01, format="%.2f", key="wl_buy_hi")
+        st.caption("🎯 목표 매도 구간")
+        wl_sell_lo = st.number_input("하단가 ($)", min_value=0.01, step=0.01, format="%.2f", key="wl_sell_lo")
+        wl_sell_hi = st.number_input("상단가 ($)", min_value=0.01, step=0.01, format="%.2f", key="wl_sell_hi")
         wl_qty = st.number_input("예정 수량 (주)", min_value=1, step=1)
         wl_memo = st.text_input("메모 (선택)", placeholder="예: 실적 발표 후 매수")
         wl_submit = st.form_submit_button("관심 종목 추가", type="primary", use_container_width=True)
 
 if wl_submit:
     if wl_ticker:
-        existing_wl = st.session_state.watchlist["종목명"] == wl_ticker
-        if existing_wl.any():
+        if wl_buy_lo > wl_buy_hi:
+            st.sidebar.error("매수 하단가가 상단가보다 클 수 없습니다.")
+        elif wl_sell_lo > wl_sell_hi:
+            st.sidebar.error("목표 매도 하단가가 상단가보다 클 수 없습니다.")
+        elif st.session_state.watchlist["종목명"].eq(wl_ticker).any():
             st.sidebar.warning(f"{wl_ticker} 이미 관심 종목에 있습니다.")
         else:
             new_wl = pd.DataFrame([{
                 "종목명": wl_ticker,
-                "목표매수가(USD)": wl_target,
+                "매수하단가(USD)": wl_buy_lo,
+                "매수상단가(USD)": wl_buy_hi,
+                "목표매도하단가(USD)": wl_sell_lo,
+                "목표매도상단가(USD)": wl_sell_hi,
                 "예정수량": wl_qty,
                 "메모": wl_memo if wl_memo else "",
             }])
