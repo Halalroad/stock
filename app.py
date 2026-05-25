@@ -503,7 +503,28 @@ def get_live_price(ticker_symbol: str):
     if not ticker_symbol:
         return None
 
-    # 1순위: Yahoo Finance REST API 직접 호출 (클라우드 환경에서 안정적)
+    # 1순위: yfinance (Streamlit Cloud 안정성 우선)
+    if YFINANCE_AVAILABLE:
+        try:
+            ticker = yf.Ticker(ticker_symbol)
+            price = None
+            if hasattr(ticker, "fast_info"):
+                try:
+                    price = ticker.fast_info.get("last_price")
+                except Exception:
+                    price = None
+            if price is None:
+                price = ticker.info.get("regularMarketPrice")
+            if price is None:
+                history = ticker.history(period="1d", interval="1m")
+                if not history.empty:
+                    price = float(history["Close"].iloc[-1])
+            if price is not None:
+                return float(price)
+        except Exception:
+            pass
+
+    # 2순위: Yahoo Finance REST API (yfinance 실패 시)
     try:
         import requests
         for base in ("https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com"):
@@ -514,33 +535,17 @@ def get_live_price(ticker_symbol: str):
                     params={"interval": "1m", "range": "1d"},
                     timeout=8,
                 )
-                price = resp.json()["chart"]["result"][0]["meta"]["regularMarketPrice"]
-                return float(price)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    price = data.get("chart", {}).get("result", [{}])[0].get("meta", {}).get("regularMarketPrice")
+                    if price:
+                        return float(price)
             except Exception:
                 continue
     except Exception:
         pass
 
-    # 2순위: yfinance 폴백
-    if not YFINANCE_AVAILABLE:
-        return None
-    try:
-        ticker = yf.Ticker(ticker_symbol)
-        price = None
-        if hasattr(ticker, "fast_info"):
-            try:
-                price = ticker.fast_info.get("last_price")
-            except Exception:
-                price = None
-        if price is None:
-            price = ticker.info.get("regularMarketPrice")
-        if price is None:
-            history = ticker.history(period="1d", interval="1m")
-            if not history.empty:
-                price = float(history["Close"].iloc[-1])
-        return float(price) if price is not None else None
-    except Exception:
-        return None
+    return None
 
 
 def profit_loss_color(val):
